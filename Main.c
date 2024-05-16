@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
+#include <omp.h>
 #include <unistd.h>
 
 #define MAX_VEHICLES 10
@@ -8,89 +8,74 @@
 
 // Estructura para representar el puente
 typedef struct {
-    pthread_mutex_t mutex;
     int is_busy;       // 1 si el puente está ocupado, 0 si está libre
     char direction;    // 'E' para Este-Oeste, 'W' para Oeste-Este
     int num_crossings; // Número de vehículos que han cruzado el puente
+    omp_lock_t lock;   // Lock para la sección crítica
 } Bridge;
 
 Bridge bridge;
 
-// Estructura para representar un vehículo
-typedef struct {
-    char type;  // Tipo de vehículo ('E' para Este-Oeste, 'W' para Oeste-Este)
-    int speed;  // Velocidad del vehículo (segundos que tarda en cruzar el puente)
-} Vehicle;
-
 // Función para que un vehículo cruce el puente
-void* cross_bridge(void* arg) {
-    Vehicle* vehicle = (Vehicle*) arg;
-
-    pthread_mutex_lock(&bridge.mutex);
-
+void cross_bridge(char type, int speed) {
     // Esperar si el puente está ocupado o si el vehículo no va en la dirección correcta
-    while (bridge.is_busy && (bridge.direction != vehicle->type || bridge.direction != vehicle->type)) {
-        pthread_mutex_unlock(&bridge.mutex);
+    omp_set_lock(&bridge.lock);
+
+    printf("Vehiculo tipo '%c' intenta cruzar el puente.\n", type);
+    
+    while (bridge.is_busy && (bridge.direction != type)) {
+        printf("Puente ocupado en direccion '%c'. Vehiculo tipo '%c' espera...\n", bridge.direction, type);
+        omp_unset_lock(&bridge.lock);
         sleep(1); // Esperar un segundo antes de volver a intentar
-        pthread_mutex_lock(&bridge.mutex);
+        omp_set_lock(&bridge.lock);
     }
 
     // Cruzar el puente (entrar)
     bridge.is_busy = 1;
-    bridge.direction = vehicle->type;
+    bridge.direction = type;
     bridge.num_crossings++;
 
-    printf("Vehiculo tipo %c ha entrado en el puente en direccion %c.\n", vehicle->type, (vehicle->type == 'E') ? 'E' : 'W');
+    printf("Vehiculo tipo %c ha entrado en el puente.\n", type);
 
-    pthread_mutex_unlock(&bridge.mutex);
+    omp_unset_lock(&bridge.lock);
 
     // Simular tiempo de cruce
-    sleep(vehicle->speed);
+    sleep(speed);
 
-    pthread_mutex_lock(&bridge.mutex);
+    omp_set_lock(&bridge.lock);
     bridge.is_busy = 0;
-    printf("Vehiculo tipo %c ha salido del puente en direccion %c.\n", vehicle->type, (vehicle->type == 'E') ? 'E' : 'W');
-    pthread_mutex_unlock(&bridge.mutex);
-
-    free(vehicle); // Liberar memoria asignada para el vehículo
-
-    return NULL;
+    printf("Vehiculo tipo %c ha salido del puente.\n", type);
+    omp_unset_lock(&bridge.lock);
 }
 
 int main() {
-    pthread_t vehicles[MAX_VEHICLES];
     char vehicle_types[MAX_VEHICLES] = {'E', 'E', 'W', 'W', 'E', 'W', 'E', 'W', 'E', 'W'};
 
     // Inicializar el puente
     bridge.is_busy = 0;
     bridge.direction = 'E';
     bridge.num_crossings = 0;
-    pthread_mutex_init(&bridge.mutex, NULL);
+    omp_init_lock(&bridge.lock);
 
-    // Crear threads para representar la llegada de vehículos
+    printf("Simulacion de cruce de vehiculos por un puente:\n");
+
+    // Utilizar OpenMP para paralelizar el cruce de vehículos
+    #pragma omp parallel for
     for (int i = 0; i < MAX_VEHICLES; i++) {
-        Vehicle* vehicle = (Vehicle*) malloc(sizeof(Vehicle));
-        vehicle->type = vehicle_types[i];
-        vehicle->speed = rand() % 10 + 1; // Velocidad aleatoria entre 1 y 3 segundos
-
-        pthread_create(&vehicles[i], NULL, cross_bridge, vehicle);
-
+        char type = vehicle_types[i];
+        int speed = rand() % 10 + 1; // Velocidad aleatoria entre 1 y 10 segundos
+        cross_bridge(type, speed);
         // Esperar un tiempo aleatorio antes de crear el próximo vehículo
         sleep(rand() % MAX_WAIT_TIME + 1);
-    }
-
-    // Esperar a que todos los vehículos terminen de cruzar
-    for (int i = 0; i < MAX_VEHICLES; i++) {
-        pthread_join(vehicles[i], NULL);
     }
 
     // Imprimir estadísticas finales
     printf("Todos los vehiculos han cruzado el puente. Total de cruces: %d.\n", bridge.num_crossings);
 
     // Liberar recursos
-    pthread_mutex_destroy(&bridge.mutex);
-	
-	printf("Presiona Enter para salir...");
+    omp_destroy_lock(&bridge.lock);
+
+    printf("Presiona Enter para salir...");
     getchar();  // Espera a que el usuario presione Enter
 
     return 0;
